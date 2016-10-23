@@ -49,24 +49,55 @@ bool SkMatrix44::operator==(const SkMatrix44& other) const {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-int SkMatrix44::computeTypeMask() const {
-    unsigned mask = 0;
+int SkMatrix44::computeTypeMask(unsigned oldMask) const {
+    unsigned mask;
 
-    if (0 != perspX() || 0 != perspY() || 0 != perspZ() || 1 != fMat[3][3]) {
-        return kTranslate_Mask | kScale_Mask | kAffine_Mask | kPerspective_Mask;
-    }
+    if (oldMask & (kPerspective_Mask << kDirtyMaskShift)) {
+        mask = 0;
 
-    if (0 != transX() || 0 != transY() || 0 != transZ()) {
-        mask |= kTranslate_Mask;
-    }
+        if (0 != perspX() || 0 != perspY() || 0 != perspZ() || 1 != fMat[3][3]) {
+            return kTranslate_Mask | kScale_Mask | kAffine_Mask | kPerspective_Mask;
+        }
 
-    if (1 != scaleX() || 1 != scaleY() || 1 != scaleZ()) {
-        mask |= kScale_Mask;
-    }
+        if (0 != transX() || 0 != transY() || 0 != transZ()) {
+            mask |= kTranslate_Mask;
+        }
 
-    if (0 != fMat[1][0] || 0 != fMat[0][1] || 0 != fMat[0][2] ||
-        0 != fMat[2][0] || 0 != fMat[1][2] || 0 != fMat[2][1]) {
+        if (1 != scaleX() || 1 != scaleY() || 1 != scaleZ()) {
+            mask |= kScale_Mask;
+        }
+
+        if (0 != fMat[1][0] || 0 != fMat[0][1] || 0 != fMat[0][2] ||
+            0 != fMat[2][0] || 0 != fMat[1][2] || 0 != fMat[2][1]) {
             mask |= kAffine_Mask;
+        }
+    } else {
+        mask = oldMask & kAllPublic_Masks;
+
+        if (oldMask & (kTranslate_Mask << kDirtyMaskShift)) {
+            if (0 != transX() || 0 != transY() || 0 != transZ()) {
+                mask |= kTranslate_Mask;
+            } else {
+                mask &= ~kTranslate_Mask;
+            }
+        }
+
+        if (oldMask & (kScale_Mask << kDirtyMaskShift)) {
+            if (1 != scaleX() || 1 != scaleY() || 1 != scaleZ()) {
+                mask |= kScale_Mask;
+            } else {
+                mask &= ~kScale_Mask;
+            }
+        }
+
+        if (oldMask & (kAffine_Mask << kDirtyMaskShift)) {
+            if (0 != fMat[1][0] || 0 != fMat[0][1] || 0 != fMat[0][2] ||
+                0 != fMat[2][0] || 0 != fMat[1][2] || 0 != fMat[2][1]) {
+                mask |= kAffine_Mask;
+            } else {
+                mask &= ~kAffine_Mask;
+            }
+        }
     }
 
     return mask;
@@ -212,7 +243,7 @@ void SkMatrix44::set3x3(SkMScalar m00, SkMScalar m01, SkMScalar m02,
     fMat[1][0] = m10; fMat[1][1] = m11; fMat[1][2] = m12; fMat[1][3] = 0;
     fMat[2][0] = m20; fMat[2][1] = m21; fMat[2][2] = m22; fMat[2][3] = 0;
     fMat[3][0] = 0;   fMat[3][1] = 0;   fMat[3][2] = 0;   fMat[3][3] = 1;
-    this->dirtyTypeMask();
+    this->setDirtyTypeMask(kAffine_Mask | kScale_Mask);
 }
 
 void SkMatrix44::set3x3RowMajorf(const float src[]) {
@@ -220,7 +251,7 @@ void SkMatrix44::set3x3RowMajorf(const float src[]) {
     fMat[1][0] = src[1]; fMat[1][1] = src[4]; fMat[1][2] = src[7]; fMat[1][3] = 0;
     fMat[2][0] = src[2]; fMat[2][1] = src[5]; fMat[2][2] = src[8]; fMat[2][3] = 0;
     fMat[3][0] = 0;      fMat[3][1] = 0;      fMat[3][2] = 0;      fMat[3][3] = 1;
-    this->dirtyTypeMask();
+    this->setDirtyTypeMask(kAffine_Mask | kScale_Mask);
 }
 
 void SkMatrix44::set3x4RowMajorf(const float src[]) {
@@ -228,7 +259,7 @@ void SkMatrix44::set3x4RowMajorf(const float src[]) {
     fMat[0][1] = src[4]; fMat[1][1] = src[5]; fMat[2][1] = src[6];  fMat[3][1] = src[7];
     fMat[0][2] = src[8]; fMat[1][2] = src[9]; fMat[2][2] = src[10]; fMat[3][2] = src[11];
     fMat[0][3] = 0;      fMat[1][3] = 0;      fMat[2][3] = 0;       fMat[3][3] = 1;
-    this->dirtyTypeMask();
+    this->setDirtyTypeMask(kAffine_Mask | kScale_Mask | kTranslate_Mask);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -251,10 +282,35 @@ void SkMatrix44::preTranslate(SkMScalar dx, SkMScalar dy, SkMScalar dz) {
         return;
     }
 
+    if (!triviallyHasPerspective()) {
+        if (isTriviallyScaleTranslate()) {
+            if (isTriviallyIdentity()) { // Identity
+                this->setTranslate(dx, dy, dz);
+                return;
+            }
+            if (isTriviallyTranslate()) { // Translate
+                fMat[3][0] += dx;
+                fMat[3][1] += dy;
+                fMat[3][2] += dz;
+            } else { // Scale & Translate
+                fMat[3][0] += fMat[0][0] * dx;
+                fMat[3][1] += fMat[1][1] * dy;
+                fMat[3][2] += fMat[2][2] * dz;
+            }
+        } else { // Affine
+            for (int i = 0; i < 3; ++i) {
+                fMat[3][i] = fMat[0][i] * dx + fMat[1][i] * dy + fMat[2][i] * dz + fMat[3][i];
+            }
+        }
+        this->dirtyTypeMask(kTranslate_Mask);
+        return;
+    }
+
+    // Perspective
     for (int i = 0; i < 4; ++i) {
         fMat[3][i] = fMat[0][i] * dx + fMat[1][i] * dy + fMat[2][i] * dz + fMat[3][i];
     }
-    this->dirtyTypeMask();
+    // No need to dirtyTypeMask for perspective - the translation can't drop perspective.
 }
 
 void SkMatrix44::postTranslate(SkMScalar dx, SkMScalar dy, SkMScalar dz) {
@@ -272,7 +328,7 @@ void SkMatrix44::postTranslate(SkMScalar dx, SkMScalar dy, SkMScalar dz) {
         fMat[3][0] += dx;
         fMat[3][1] += dy;
         fMat[3][2] += dz;
-        this->dirtyTypeMask();
+        this->dirtyTypeMask(kTranslate_Mask);
     }
 }
 
@@ -296,6 +352,27 @@ void SkMatrix44::preScale(SkMScalar sx, SkMScalar sy, SkMScalar sz) {
         return;
     }
 
+    if (!triviallyHasPerspective()) {
+        if (isTriviallyIdentity()) {
+            setScale(sx, sy, sz);
+            return;
+        }
+        if (isTriviallyScaleTranslate()) {
+            fMat[0][0] *= sx;
+            fMat[1][1] *= sy;
+            fMat[2][2] *= sz;
+            this->dirtyTypeMask(kScale_Mask);
+        } else {
+            for (int i = 0; i < 3; i++) {
+                fMat[0][i] *= sx;
+                fMat[1][i] *= sy;
+                fMat[2][i] *= sz;
+            }
+            this->dirtyTypeMask(kScale_Mask | kAffine_Mask);
+        }
+        return;
+    }
+
     // The implementation matrix * pureScale can be shortcut
     // by knowing that pureScale components effectively scale
     // the columns of the original matrix.
@@ -304,11 +381,23 @@ void SkMatrix44::preScale(SkMScalar sx, SkMScalar sy, SkMScalar sz) {
         fMat[1][i] *= sy;
         fMat[2][i] *= sz;
     }
-    this->dirtyTypeMask();
+    this->dirtyTypeMask(); // Scaling may drop perspective.
 }
 
 void SkMatrix44::postScale(SkMScalar sx, SkMScalar sy, SkMScalar sz) {
     if (1 == sx && 1 == sy && 1 == sz) {
+        return;
+    }
+
+    if (isTriviallyScaleTranslate()) {
+        if (isTriviallyIdentity()) {
+            setScale(sx, sy, sz);
+            return;
+        }
+        fMat[0][0] *= sx;
+        fMat[1][1] *= sy;
+        fMat[2][2] *= sz;
+        this->dirtyTypeMask(kScale_Mask);
         return;
     }
 
@@ -317,7 +406,20 @@ void SkMatrix44::postScale(SkMScalar sx, SkMScalar sy, SkMScalar sz) {
         fMat[i][1] *= sy;
         fMat[i][2] *= sz;
     }
-    this->dirtyTypeMask();
+    this->dirtyTypeMask((fTypeMask & kAllPublic_Masks) | kScale_Mask);
+}
+
+void SkMatrix44::setScaleTranslate(SkMScalar sx, SkMScalar sy, SkMScalar sz,
+                                   SkMScalar tx, SkMScalar ty, SkMScalar tz) {
+    this->setIdentity();
+    fMat[0][0] = sx;
+    fMat[1][1] = sy;
+    fMat[2][2] = sz;
+
+    fMat[3][0] = tx;
+    fMat[3][1] = ty;
+    fMat[3][2] = tz;
+    dirtyTypeMask(kScale_Mask | kTranslate_Mask);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -402,6 +504,7 @@ void SkMatrix44::setConcat(const SkMatrix44& a, const SkMatrix44& b) {
         result[13] = a.fMat[1][1] * b.fMat[3][1] + a.fMat[3][1];
         result[14] = a.fMat[2][2] * b.fMat[3][2] + a.fMat[3][2];
         result[15] = 1;
+        this->setDirtyTypeMask(kScale_Mask | kTranslate_Mask);
     } else {
         for (int j = 0; j < 4; j++) {
             for (int i = 0; i < 4; i++) {
@@ -412,12 +515,12 @@ void SkMatrix44::setConcat(const SkMatrix44& a, const SkMatrix44& b) {
                 *result++ = SkDoubleToMScalar(value);
             }
         }
+        this->dirtyTypeMask();
     }
 
     if (useStorage) {
         memcpy(fMat, storage, sizeof(storage));
     }
-    this->dirtyTypeMask();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -904,6 +1007,8 @@ void SkMatrix44::map2(const double src2[], int count, double dst4[]) const {
 }
 
 bool SkMatrix44::preserves2dAxisAlignment (SkMScalar epsilon) const {
+    if (isTriviallyTranslate())
+        return true;
 
     // Can't check (mask & kPerspective_Mask) because Z isn't relevant here.
     if (0 != perspX() || 0 != perspY()) return false;
@@ -993,6 +1098,10 @@ SkMatrix44& SkMatrix44::operator=(const SkMatrix& src) {
 
     if (src.isIdentity()) {
         this->setTypeMask(kIdentity_Mask);
+    } else if (src.isScaleTranslate()) {
+        // At this point we are not sure whether "src" is translate or scale.
+        // Verify it later, now dirty both scale and translate.
+        this->setDirtyTypeMask(kScale_Mask | kTranslate_Mask);
     } else {
         this->dirtyTypeMask();
     }

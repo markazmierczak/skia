@@ -52,6 +52,7 @@ public:
     bool operator==(const SkFontStyle& rhs) const {
         return fUnion.fU32 == rhs.fUnion.fU32;
     }
+    bool operator!=(const SkFontStyle& rhs) const { return !operator==(rhs); }
 
     int weight() const { return fUnion.fR.fWeight; }
     int width() const { return fUnion.fR.fWidth; }

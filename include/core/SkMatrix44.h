@@ -205,7 +205,7 @@ public:
      */
     inline TypeMask getType() const {
         if (fTypeMask & kUnknown_Mask) {
-            fTypeMask = this->computeTypeMask();
+            fTypeMask = this->computeTypeMask(fTypeMask);
         }
         SkASSERT(!(fTypeMask & kUnknown_Mask));
         return (TypeMask)fTypeMask;
@@ -268,7 +268,10 @@ public:
         SkASSERT((unsigned)row <= 3);
         SkASSERT((unsigned)col <= 3);
         fMat[col][row] = value;
-        this->dirtyTypeMask();
+        if (row == 3)
+            this->dirtyTypeMask();
+        else
+            this->dirtyTypeMask(kAffine_Mask | kScale_Mask | kTranslate_Mask);
     }
 
     inline double getDouble(int row, int col) const {
@@ -346,6 +349,9 @@ public:
     inline void postScale(SkMScalar scale) {
         this->postScale(scale, scale, scale);
     }
+
+    void setScaleTranslate(SkMScalar sx, SkMScalar sy, SkMScalar sz,
+                           SkMScalar tx, SkMScalar ty, SkMScalar tz);
 
     void setRotateDegreesAbout(SkMScalar x, SkMScalar y, SkMScalar z,
                                SkMScalar degrees) {
@@ -452,9 +458,9 @@ private:
     mutable unsigned    fTypeMask;
 
     enum {
-        kUnknown_Mask = 0x80,
-
-        kAllPublic_Masks = 0xF
+        kAllPublic_Masks = 0x0F,
+        kDirtyMaskShift = 4,
+        kUnknown_Mask = kAllPublic_Masks << kDirtyMaskShift,
     };
 
     void as3x4RowMajorf(float[]) const;
@@ -472,15 +478,20 @@ private:
     SkMScalar perspY() const { return fMat[1][3]; }
     SkMScalar perspZ() const { return fMat[2][3]; }
 
-    int computeTypeMask() const;
+    int computeTypeMask(unsigned dirtyMask) const;
 
-    inline void dirtyTypeMask() {
-        fTypeMask = kUnknown_Mask;
+    inline void dirtyTypeMask(unsigned dirtyMask = kAllPublic_Masks) {
+        SkASSERT(dirtyMask != kIdentity_Mask && !(dirtyMask & ~kAllPublic_Masks));
+        fTypeMask |= dirtyMask << kDirtyMaskShift;
     }
 
-    inline void setTypeMask(int mask) {
+    inline void setTypeMask(unsigned mask) {
         SkASSERT(0 == (~(kAllPublic_Masks | kUnknown_Mask) & mask));
         fTypeMask = mask;
+    }
+    inline void setDirtyTypeMask(unsigned dirtyMask) {
+        SkASSERT(dirtyMask != kIdentity_Mask && !(dirtyMask & ~kAllPublic_Masks));
+        fTypeMask = dirtyMask << kDirtyMaskShift;
     }
 
     /**
@@ -490,6 +501,17 @@ private:
     inline bool isTriviallyIdentity() const {
         return 0 == fTypeMask;
     }
+#define _(x) ((x) | ((x) << kDirtyMaskShift))
+    inline bool isTriviallyTranslate() const {
+        return (fTypeMask & ~_(kTranslate_Mask)) == 0;
+    }
+    inline bool isTriviallyScaleTranslate() const {
+        return (fTypeMask & ~_(kTranslate_Mask | kScale_Mask)) == 0;
+    }
+    inline bool triviallyHasPerspective() const {
+        return (fTypeMask & _(kPerspective_Mask)) != 0;
+    }
+#undef _
 
     friend class SkColorSpace;
 };

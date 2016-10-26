@@ -124,6 +124,14 @@ void SkPaintFilterCanvas::onDrawBitmapNine(const SkBitmap& bm, const SkIRect& ce
     }
 }
 
+void SkPaintFilterCanvas::onDrawBitmapLattice(const SkBitmap& bm, const Lattice& lattice,
+                                              const SkRect& dst, const SkPaint* paint) {
+    AutoPaintFilter apf(this, kBitmap_Type, paint);
+    if (apf.shouldDraw()) {
+        this->INHERITED::onDrawBitmapLattice(bm, lattice, dst, apf.paint());
+    }
+}
+
 void SkPaintFilterCanvas::onDrawImage(const SkImage* image, SkScalar left, SkScalar top,
                                       const SkPaint* paint) {
     AutoPaintFilter apf(this, kBitmap_Type, paint);
@@ -146,6 +154,14 @@ void SkPaintFilterCanvas::onDrawImageNine(const SkImage* image, const SkIRect& c
     AutoPaintFilter apf(this, kBitmap_Type, paint);
     if (apf.shouldDraw()) {
         this->INHERITED::onDrawImageNine(image, center, dst, apf.paint());
+    }
+}
+
+void SkPaintFilterCanvas::onDrawImageLattice(const SkImage* image, const Lattice& lattice,
+                                             const SkRect& dst, const SkPaint* paint) {
+    AutoPaintFilter apf(this, kBitmap_Type, paint);
+    if (apf.shouldDraw()) {
+        this->INHERITED::onDrawImageLattice(image, lattice, dst, apf.paint());
     }
 }
 

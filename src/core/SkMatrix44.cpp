@@ -397,14 +397,15 @@ void SkMatrix44::postScale(SkMScalar sx, SkMScalar sy, SkMScalar sz) {
         fMat[0][0] *= sx;
         fMat[1][1] *= sy;
         fMat[2][2] *= sz;
-        this->dirtyTypeMask(kScale_Mask);
-        return;
-    }
-
-    for (int i = 0; i < 4; i++) {
-        fMat[i][0] *= sx;
-        fMat[i][1] *= sy;
-        fMat[i][2] *= sz;
+        fMat[3][0] *= sx;
+        fMat[3][1] *= sy;
+        fMat[3][2] *= sz;
+    } else {
+        for (int i = 0; i < 4; i++) {
+            fMat[i][0] *= sx;
+            fMat[i][1] *= sy;
+            fMat[i][2] *= sz;
+        }
     }
     this->dirtyTypeMask((fTypeMask & kAllPublic_Masks) | kScale_Mask);
 }

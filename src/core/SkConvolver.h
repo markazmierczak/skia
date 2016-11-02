@@ -6,7 +6,7 @@
 #define SK_CONVOLVER_H
 
 #include "SkSize.h"
-#include "SkTDArray.h"
+#include "../private/SkTDArray.h"
 
 // avoid confusion with Mac OS X's math library (Carbon)
 #if defined(__APPLE__)

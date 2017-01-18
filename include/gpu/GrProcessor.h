@@ -314,7 +314,7 @@ public:
     GrIOType ioType() const { return fTexture.ioType(); }
     GrImageStorageFormat format() const { return fFormat; }
     GrSLMemoryModel memoryModel() const { return fMemoryModel; }
-    GrSLRestrict restrict() const { return fRestrict; }
+    GrSLRestrict restricts() const { return fRestrict; }
 
     /**
      * For internal use by GrProcessor.

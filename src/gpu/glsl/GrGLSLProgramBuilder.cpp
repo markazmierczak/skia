@@ -340,7 +340,7 @@ void GrGLSLProgramBuilder::emitImageStorage(const GrProcessor::ImageStorageAcces
     }
     GrSLType uniformType = access.texture()->texturePriv().imageStorageType();
     ImageStorageHandle handle = this->uniformHandler()->addImageStorage(access.visibility(),
-         uniformType, access.format(), access.memoryModel(), access.restrict(), access.ioType(),
+         uniformType, access.format(), access.memoryModel(), access.restricts(), access.ioType(),
          name);
     outImageStorageHandles->emplace_back(handle);
 }

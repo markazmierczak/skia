@@ -4,14 +4,12 @@
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
- 
-#include "SkSLCompiler.h"
 
-#include <fstream>
-#include <streambuf>
+#include "SkSLCompiler.h"
 
 #include "ast/SkSLASTPrecision.h"
 #include "SkSLCFGGenerator.h"
+#include "SkSLGLSLCodeGenerator.h"
 #include "SkSLIRGenerator.h"
 #include "SkSLParser.h"
 #include "SkSLSPIRVCodeGenerator.h"
@@ -19,6 +17,7 @@
 #include "ir/SkSLIntLiteral.h"
 #include "ir/SkSLModifiersDeclaration.h"
 #include "ir/SkSLSymbolTable.h"
+#include "ir/SkSLUnresolvedFunction.h"
 #include "ir/SkSLVarDeclarations.h"
 #include "SkMutex.h"
 
@@ -40,7 +39,7 @@ static const char* SKSL_FRAG_INCLUDE =
 
 namespace SkSL {
 
-Compiler::Compiler() 
+Compiler::Compiler()
 : fErrorCount(0) {
     auto types = std::shared_ptr<SymbolTable>(new SymbolTable(*this));
     auto symbols = std::shared_ptr<SymbolTable>(new SymbolTable(types, *this));
@@ -70,17 +69,17 @@ Compiler::Compiler()
     ADD_TYPE(BVec3);
     ADD_TYPE(BVec4);
     ADD_TYPE(Mat2x2);
-    types->addWithoutOwnership("mat2x2", fContext.fMat2x2_Type.get());
+    types->addWithoutOwnership(SkString("mat2x2"), fContext.fMat2x2_Type.get());
     ADD_TYPE(Mat2x3);
     ADD_TYPE(Mat2x4);
     ADD_TYPE(Mat3x2);
     ADD_TYPE(Mat3x3);
-    types->addWithoutOwnership("mat3x3", fContext.fMat3x3_Type.get());
+    types->addWithoutOwnership(SkString("mat3x3"), fContext.fMat3x3_Type.get());
     ADD_TYPE(Mat3x4);
     ADD_TYPE(Mat4x2);
     ADD_TYPE(Mat4x3);
     ADD_TYPE(Mat4x4);
-    types->addWithoutOwnership("mat4x4", fContext.fMat4x4_Type.get());
+    types->addWithoutOwnership(SkString("mat4x4"), fContext.fMat4x4_Type.get());
     ADD_TYPE(GenType);
     ADD_TYPE(GenDType);
     ADD_TYPE(GenIType);
@@ -110,6 +109,14 @@ Compiler::Compiler()
     ADD_TYPE(Sampler2DMS);
     ADD_TYPE(Sampler2DMSArray);
 
+    ADD_TYPE(ISampler2D);
+
+    ADD_TYPE(Image2D);
+    ADD_TYPE(IImage2D);
+
+    ADD_TYPE(SubpassInput);
+    ADD_TYPE(SubpassInputMS);
+
     ADD_TYPE(GSampler1D);
     ADD_TYPE(GSampler2D);
     ADD_TYPE(GSampler3D);
@@ -132,9 +139,15 @@ Compiler::Compiler()
     ADD_TYPE(GSampler2DArrayShadow);
     ADD_TYPE(GSamplerCubeArrayShadow);
 
+    SkString skCapsName("sk_Caps");
+    Variable* skCaps = new Variable(Position(), Modifiers(), skCapsName, 
+                                    *fContext.fSkCaps_Type, Variable::kGlobal_Storage);
+    fIRGenerator->fSymbolTable->add(skCapsName, std::unique_ptr<Symbol>(skCaps));
+
     Modifiers::Flag ignored1;
     std::vector<std::unique_ptr<ProgramElement>> ignored2;
-    this->internalConvertProgram(SKSL_INCLUDE, &ignored1, &ignored2);
+    this->internalConvertProgram(SkString(SKSL_INCLUDE), &ignored1, &ignored2);
+    fIRGenerator->fSymbolTable->markAllFunctionsBuiltin();
     ASSERT(!fErrorCount);
 }
 
@@ -157,23 +170,23 @@ void Compiler::addDefinition(const Expression* lvalue, const Expression* expr,
             // We consider the variable written to as long as at least some of its components have
             // been written to. This will lead to some false negatives (we won't catch it if you
             // write to foo.x and then read foo.y), but being stricter could lead to false positives
-            // (we write to foo.x, and then pass foo to a function which happens to only read foo.x, 
-            // but since we pass foo as a whole it is flagged as an error) unless we perform a much 
+            // (we write to foo.x, and then pass foo to a function which happens to only read foo.x,
+            // but since we pass foo as a whole it is flagged as an error) unless we perform a much
             // more complicated whole-program analysis. This is probably good enough.
-            this->addDefinition(((Swizzle*) lvalue)->fBase.get(), 
-                                fContext.fDefined_Expression.get(), 
+            this->addDefinition(((Swizzle*) lvalue)->fBase.get(),
+                                fContext.fDefined_Expression.get(),
                                 definitions);
             break;
         case Expression::kIndex_Kind:
             // see comments in Swizzle
-            this->addDefinition(((IndexExpression*) lvalue)->fBase.get(), 
-                                fContext.fDefined_Expression.get(), 
+            this->addDefinition(((IndexExpression*) lvalue)->fBase.get(),
+                                fContext.fDefined_Expression.get(),
                                 definitions);
             break;
         case Expression::kFieldAccess_Kind:
             // see comments in Swizzle
-            this->addDefinition(((FieldAccess*) lvalue)->fBase.get(), 
-                                fContext.fDefined_Expression.get(), 
+            this->addDefinition(((FieldAccess*) lvalue)->fBase.get(),
+                                fContext.fDefined_Expression.get(),
                                 definitions);
             break;
         default:
@@ -183,7 +196,7 @@ void Compiler::addDefinition(const Expression* lvalue, const Expression* expr,
 }
 
 // add local variables defined by this node to the set
-void Compiler::addDefinitions(const BasicBlock::Node& node, 
+void Compiler::addDefinitions(const BasicBlock::Node& node,
                               std::unordered_map<const Variable*, const Expression*>* definitions) {
     switch (node.fKind) {
         case BasicBlock::Node::kExpression_Kind: {
@@ -247,15 +260,15 @@ void Compiler::scanCFG(CFG* cfg, BlockId blockId, std::set<BlockId>* workList) {
 // is initially unknown
 static std::unordered_map<const Variable*, const Expression*> compute_start_state(const CFG& cfg) {
     std::unordered_map<const Variable*, const Expression*> result;
-    for (const auto block : cfg.fBlocks) {
-        for (const auto node : block.fNodes) {
+    for (const auto& block : cfg.fBlocks) {
+        for (const auto& node : block.fNodes) {
             if (node.fKind == BasicBlock::Node::kStatement_Kind) {
                 const Statement* s = (Statement*) node.fNode;
                 if (s->fKind == Statement::kVarDeclarations_Kind) {
                     const VarDeclarationsStatement* vd = (const VarDeclarationsStatement*) s;
                     for (const VarDeclaration& decl : vd->fDeclaration->fVars) {
                         result[decl.fVar] = nullptr;
-                    } 
+                    }
                 }
             }
         }
@@ -280,9 +293,9 @@ void Compiler::scanCFG(const FunctionDefinition& f) {
 
     // check for unreachable code
     for (size_t i = 0; i < cfg.fBlocks.size(); i++) {
-        if (i != cfg.fStart && !cfg.fBlocks[i].fEntrances.size() && 
+        if (i != cfg.fStart && !cfg.fBlocks[i].fEntrances.size() &&
             cfg.fBlocks[i].fNodes.size()) {
-            this->error(cfg.fBlocks[i].fNodes[0].fNode->fPosition, "unreachable");
+            this->error(cfg.fBlocks[i].fNodes[0].fNode->fPosition, SkString("unreachable"));
         }
     }
     if (fErrorCount) {
@@ -297,11 +310,11 @@ void Compiler::scanCFG(const FunctionDefinition& f) {
                 const Expression* expr = (const Expression*) n.fNode;
                 if (expr->fKind == Expression::kVariableReference_Kind) {
                     const Variable& var = ((VariableReference*) expr)->fVariable;
-                    if (var.fStorage == Variable::kLocal_Storage && 
+                    if (var.fStorage == Variable::kLocal_Storage &&
                         !definitions[&var]) {
                         this->error(expr->fPosition,
                                     "'" + var.fName + "' has not been assigned");
-                    } 
+                    }
                 }
             }
             this->addDefinitions(n, &definitions);
@@ -311,12 +324,12 @@ void Compiler::scanCFG(const FunctionDefinition& f) {
     // check for missing return
     if (f.fDeclaration.fReturnType != *fContext.fVoid_Type) {
         if (cfg.fBlocks[cfg.fExit].fEntrances.size()) {
-            this->error(f.fPosition, "function can exit without returning a value");
+            this->error(f.fPosition, SkString("function can exit without returning a value"));
         }
     }
 }
 
-void Compiler::internalConvertProgram(std::string text,
+void Compiler::internalConvertProgram(SkString text,
                                       Modifiers::Flag* defaultPrecision,
                                       std::vector<std::unique_ptr<ProgramElement>>* result) {
     Parser parser(text, *fTypes, *this);
@@ -330,7 +343,7 @@ void Compiler::internalConvertProgram(std::string text,
         switch (decl.fKind) {
             case ASTDeclaration::kVar_Kind: {
                 std::unique_ptr<VarDeclarations> s = fIRGenerator->convertVarDeclarations(
-                                                                         (ASTVarDeclarations&) decl, 
+                                                                         (ASTVarDeclarations&) decl,
                                                                          Variable::kGlobal_Storage);
                 if (s) {
                     result->push_back(std::move(s));
@@ -379,36 +392,79 @@ void Compiler::internalConvertProgram(std::string text,
     }
 }
 
-std::unique_ptr<Program> Compiler::convertProgram(Program::Kind kind, std::string text) {
+std::unique_ptr<Program> Compiler::convertProgram(Program::Kind kind, SkString text,
+                                                  const Program::Settings& settings) {
     fErrorText = "";
     fErrorCount = 0;
-    fIRGenerator->pushSymbolTable();
+    fIRGenerator->start(&settings);
     std::vector<std::unique_ptr<ProgramElement>> elements;
     Modifiers::Flag ignored;
     switch (kind) {
         case Program::kVertex_Kind:
-            this->internalConvertProgram(SKSL_VERT_INCLUDE, &ignored, &elements);
+            this->internalConvertProgram(SkString(SKSL_VERT_INCLUDE), &ignored, &elements);
             break;
         case Program::kFragment_Kind:
-            this->internalConvertProgram(SKSL_FRAG_INCLUDE, &ignored, &elements);
+            this->internalConvertProgram(SkString(SKSL_FRAG_INCLUDE), &ignored, &elements);
             break;
     }
+    fIRGenerator->fSymbolTable->markAllFunctionsBuiltin();
     Modifiers::Flag defaultPrecision;
     this->internalConvertProgram(text, &defaultPrecision, &elements);
-    auto result = std::unique_ptr<Program>(new Program(kind, defaultPrecision, std::move(elements), 
-                                                       fIRGenerator->fSymbolTable));;
-    fIRGenerator->popSymbolTable();
+    auto result = std::unique_ptr<Program>(new Program(kind, settings, defaultPrecision, &fContext,
+                                                       std::move(elements),
+                                                       fIRGenerator->fSymbolTable,
+                                                       fIRGenerator->fInputs));
+    fIRGenerator->finish();
+    this->writeErrorCount();
+    if (fErrorCount) {
+        return nullptr;
+    }
+    return result;
+}
+
+
+bool Compiler::toSPIRV(const Program& program, SkWStream& out) {
+    SPIRVCodeGenerator cg(&fContext, &program, this, &out);
+    bool result = cg.generateCode();
     this->writeErrorCount();
     return result;
 }
 
-void Compiler::error(Position position, std::string msg) {
+bool Compiler::toSPIRV(const Program& program, SkString* out) {
+    SkDynamicMemoryWStream buffer;
+    bool result = this->toSPIRV(program, buffer);
+    if (result) {
+        sk_sp<SkData> data(buffer.detachAsData());
+        *out = SkString((const char*) data->data(), data->size());
+    }
+    return result;
+}
+
+bool Compiler::toGLSL(const Program& program, SkWStream& out) {
+    GLSLCodeGenerator cg(&fContext, &program, this, &out);
+    bool result = cg.generateCode();
+    this->writeErrorCount();
+    return result;
+}
+
+bool Compiler::toGLSL(const Program& program, SkString* out) {
+    SkDynamicMemoryWStream buffer;
+    bool result = this->toGLSL(program, buffer);
+    if (result) {
+        sk_sp<SkData> data(buffer.detachAsData());
+        *out = SkString((const char*) data->data(), data->size());
+    }
+    return result;
+}
+
+
+void Compiler::error(Position position, SkString msg) {
     fErrorCount++;
     fErrorText += "error: " + position.description() + ": " + msg.c_str() + "\n";
 }
 
-std::string Compiler::errorText() {
-    std::string result = fErrorText;
+SkString Compiler::errorText() {
+    SkString result = fErrorText;
     return result;
 }
 
@@ -420,46 +476,6 @@ void Compiler::writeErrorCount() {
         }
         fErrorText += "\n";
     }
-}
-
-bool Compiler::toSPIRV(Program::Kind kind, const std::string& text, std::ostream& out) {
-    auto program = this->convertProgram(kind, text);
-    if (fErrorCount == 0) {
-        SkSL::SPIRVCodeGenerator cg(&fContext);
-        cg.generateCode(*program.get(), out);
-        ASSERT(!out.rdstate());
-    }
-    return fErrorCount == 0;
-}
-
-bool Compiler::toSPIRV(Program::Kind kind, const std::string& text, std::string* out) {
-    std::stringstream buffer;
-    bool result = this->toSPIRV(kind, text, buffer);
-    if (result) {
-        *out = buffer.str();
-    }
-    return result;
-}
-
-bool Compiler::toGLSL(Program::Kind kind, const std::string& text, GLCaps caps, 
-                      std::ostream& out) {
-    auto program = this->convertProgram(kind, text);
-    if (fErrorCount == 0) {
-        SkSL::GLSLCodeGenerator cg(&fContext, caps);
-        cg.generateCode(*program.get(), out);
-        ASSERT(!out.rdstate());
-    }
-    return fErrorCount == 0;
-}
-
-bool Compiler::toGLSL(Program::Kind kind, const std::string& text, GLCaps caps, 
-                      std::string* out) {
-    std::stringstream buffer;
-    bool result = this->toGLSL(kind, text, caps, buffer);
-    if (result) {
-        *out = buffer.str();
-    }
-    return result;
 }
 
 } // namespace

@@ -85,12 +85,13 @@ const SkOpAngle* AngleWinding(SkOpSpanBase* start, SkOpSpanBase* end, int* windi
     return angle;
 }
 
-SkOpSegment* FindUndone(SkOpContourHead* contourList, SkOpSpanBase** startPtr,
-         SkOpSpanBase** endPtr) {
-    SkOpSegment* result;
-    SkOpContour* contour = contourList;
+SkOpSpan* FindUndone(SkOpContourHead* contourHead) {
+    SkOpContour* contour = contourHead;
     do {
-        result = contour->undoneSegment(startPtr, endPtr);
+        if (contour->done()) {
+            continue;
+        }
+        SkOpSpan* result = contour->undoneSpan();
         if (result) {
             return result;
         }
@@ -318,7 +319,9 @@ bool HandleCoincidence(SkOpContourHead* contourList, SkOpCoincidence* coincidenc
     do {
         SkOpCoincidence* pairs = overlaps.isEmpty() ? coincidence : &overlaps;
         // adjust the winding value to account for coincident edges
-        pairs->apply(DEBUG_ITER_ONLY_PARAMS(SAFETY_COUNT - safetyHatch));  
+        if (!pairs->apply(DEBUG_ITER_ONLY_PARAMS(SAFETY_COUNT - safetyHatch))) {
+            return false;
+        } 
         // For each coincident pair that overlaps another, when the receivers (the 1st of the pair)
         // are different, construct a new pair to resolve their mutual span
         if (!pairs->findOverlaps(&overlaps  DEBUG_ITER_PARAMS(SAFETY_COUNT - safetyHatch))) {

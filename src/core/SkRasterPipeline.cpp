@@ -8,40 +8,60 @@
 #include "SkOpts.h"
 #include "SkRasterPipeline.h"
 
-SkRasterPipeline::SkRasterPipeline() {
-    fBodyStart = SkOpts::body[just_return];
-    fTailStart = SkOpts::tail[just_return];
-}
-
-void SkRasterPipeline::append(void (*body)(), void (*tail)(), void* ctx) {
-    // Each stage holds its own context and the next function to call.
-    // So the pipeline itself has to hold onto the first function that starts the pipeline.
-    (fBody.empty() ? fBodyStart : fBody.back().fNext) = body;
-    (fTail.empty() ? fTailStart : fTail.back().fNext) = tail;
-
-    // Each last stage starts with its next function set to JustReturn as a safety net.
-    // It'll be overwritten by the next call to append().
-    fBody.push_back({ SkOpts::body[just_return], ctx });
-    fTail.push_back({ SkOpts::tail[just_return], ctx });
-}
+SkRasterPipeline::SkRasterPipeline() {}
 
 void SkRasterPipeline::append(StockStage stage, void* ctx) {
-    this->append(SkOpts::body[stage], SkOpts::tail[stage], ctx);
+    SkASSERT(stage != from_srgb);
+    fStages.push_back({stage, ctx});
 }
 
 void SkRasterPipeline::extend(const SkRasterPipeline& src) {
-    SkASSERT(src.fBody.count() == src.fTail.count());
+    fStages.insert(fStages.end(),
+                   src.fStages.begin(), src.fStages.end());
+}
 
-    auto body = src.fBodyStart,
-         tail = src.fTailStart;
-    for (int i = 0; i < src.fBody.count(); i++) {
-        SkASSERT(src.fBody[i].fCtx == src.fTail[i].fCtx);
-        this->append(body, tail, src.fBody[i].fCtx);
-        body = src.fBody[i].fNext;
-        tail = src.fTail[i].fNext;
+void SkRasterPipeline::run(size_t x, size_t y, size_t n) const {
+    if (!fStages.empty()) {
+        SkOpts::run_pipeline(x,y,n, fStages.data(), SkToInt(fStages.size()));
     }
 }
 
-void SkRasterPipeline::run(size_t x, size_t n) {
-    SkOpts::run_pipeline(x,n, fBodyStart,fBody.begin(), fTailStart,fTail.begin());
+std::function<void(size_t, size_t, size_t)> SkRasterPipeline::compile() const {
+#ifdef SK_RASTER_PIPELINE_HAS_JIT
+    if (auto fn = this->jit()) {
+        return fn;
+    }
+#endif
+    return SkOpts::compile_pipeline(fStages.data(), SkToInt(fStages.size()));
+}
+
+void SkRasterPipeline::dump() const {
+    SkDebugf("SkRasterPipeline, %d stages\n", SkToInt(fStages.size()));
+    for (auto&& st : fStages) {
+        const char* name = "";
+        switch (st.stage) {
+        #define M(x) case x: name = #x; break;
+            SK_RASTER_PIPELINE_STAGES(M)
+        #undef M
+        }
+        SkDebugf("\t%s\n", name);
+    }
+    SkDebugf("\n");
+}
+
+// It's pretty easy to start with sound premultiplied linear floats, pack those
+// to sRGB encoded bytes, then read them back to linear floats and find them not
+// quite premultiplied, with a color channel just a smidge greater than the alpha
+// channel.  This can happen basically any time we have different transfer
+// functions for alpha and colors... sRGB being the only one we draw into.
+
+// This is an annoying problem with no known good solution.  So apply the clamp hammer.
+
+void SkRasterPipeline::append_from_srgb(SkAlphaType at) {
+    //this->append(from_srgb);
+    fStages.push_back({from_srgb, nullptr});
+
+    if (at == kPremul_SkAlphaType) {
+        this->append(SkRasterPipeline::clamp_a);
+    }
 }

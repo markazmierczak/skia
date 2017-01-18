@@ -428,7 +428,7 @@ static HRESULT subset_typeface(SkXPSDevice::TypefaceUse* current) {
         fontPackageBuffer.realloc(bytesWritten);
     }
 
-    SkAutoTDelete<SkMemoryStream> newStream(new SkMemoryStream());
+    std::unique_ptr<SkMemoryStream> newStream(new SkMemoryStream());
     newStream->setMemoryOwned(fontPackageBuffer.release(), bytesWritten + extra);
 
     SkTScopedComPtr<IStream> newIStream;
@@ -658,8 +658,7 @@ HRESULT SkXPSDevice::createXpsImageBrush(
         const SkAlpha alpha,
         IXpsOMTileBrush** xpsBrush) {
     SkDynamicMemoryWStream write;
-    if (!SkImageEncoder::EncodeStream(&write, bitmap,
-                                      SkImageEncoder::kPNG_Type, 100)) {
+    if (!SkEncodeImage(&write, bitmap, SkEncodedImageFormat::kPNG, 100)) {
         HRM(E_FAIL, "Unable to encode bitmap as png.");
     }
     SkMemoryStream* read = new SkMemoryStream;
@@ -1181,7 +1180,7 @@ void SkXPSDevice::drawPoints(const SkDraw& d, SkCanvas::PointMode mode,
 void SkXPSDevice::drawVertices(const SkDraw&, SkCanvas::VertexMode,
                                int vertexCount, const SkPoint verts[],
                                const SkPoint texs[], const SkColor colors[],
-                               SkXfermode* xmode, const uint16_t indices[],
+                               SkBlendMode, const uint16_t indices[],
                                int indexCount, const SkPaint& paint) {
     //TODO: override this for XPS
     SkDEBUGF(("XPS drawVertices not yet implemented."));

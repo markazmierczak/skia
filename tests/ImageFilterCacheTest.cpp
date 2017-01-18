@@ -30,7 +30,7 @@ static void test_find_existing(skiatest::Reporter* reporter,
                                const sk_sp<SkSpecialImage>& image,
                                const sk_sp<SkSpecialImage>& subset) {
     static const size_t kCacheSize = 1000000;
-    SkAutoTUnref<SkImageFilterCache> cache(SkImageFilterCache::Create(kCacheSize));
+    sk_sp<SkImageFilterCache> cache(SkImageFilterCache::Create(kCacheSize));
 
     SkIRect clip = SkIRect::MakeWH(100, 100);
     SkImageFilterCacheKey key1(0, SkMatrix::I(), clip, image->uniqueID(), image->subset());
@@ -41,7 +41,7 @@ static void test_find_existing(skiatest::Reporter* reporter,
 
     SkIPoint foundOffset;
 
-    SkSpecialImage* foundImage = cache->get(key1, &foundOffset);
+    sk_sp<SkSpecialImage> foundImage = cache->get(key1, &foundOffset);
     REPORTER_ASSERT(reporter, foundImage);
     REPORTER_ASSERT(reporter, offset == foundOffset);
 
@@ -54,7 +54,7 @@ static void test_dont_find_if_diff_key(skiatest::Reporter* reporter,
                                        const sk_sp<SkSpecialImage>& image,
                                        const sk_sp<SkSpecialImage>& subset) {
     static const size_t kCacheSize = 1000000;
-    SkAutoTUnref<SkImageFilterCache> cache(SkImageFilterCache::Create(kCacheSize));
+    sk_sp<SkImageFilterCache> cache(SkImageFilterCache::Create(kCacheSize));
 
     SkIRect clip1 = SkIRect::MakeWH(100, 100);
     SkIRect clip2 = SkIRect::MakeWH(200, 200);
@@ -79,7 +79,7 @@ static void test_dont_find_if_diff_key(skiatest::Reporter* reporter,
 static void test_internal_purge(skiatest::Reporter* reporter, const sk_sp<SkSpecialImage>& image) {
     SkASSERT(image->getSize());
     const size_t kCacheSize = image->getSize() + 10;
-    SkAutoTUnref<SkImageFilterCache> cache(SkImageFilterCache::Create(kCacheSize));
+    sk_sp<SkImageFilterCache> cache(SkImageFilterCache::Create(kCacheSize));
 
     SkIRect clip = SkIRect::MakeWH(100, 100);
     SkImageFilterCacheKey key1(0, SkMatrix::I(), clip, image->uniqueID(), image->subset());
@@ -104,7 +104,7 @@ static void test_explicit_purging(skiatest::Reporter* reporter,
                                   const sk_sp<SkSpecialImage>& image,
                                   const sk_sp<SkSpecialImage>& subset) {
     static const size_t kCacheSize = 1000000;
-    SkAutoTUnref<SkImageFilterCache> cache(SkImageFilterCache::Create(kCacheSize));
+    sk_sp<SkImageFilterCache> cache(SkImageFilterCache::Create(kCacheSize));
 
     SkIRect clip = SkIRect::MakeWH(100, 100);
     SkImageFilterCacheKey key1(0, SkMatrix::I(), clip, image->uniqueID(), image->subset());
@@ -154,12 +154,14 @@ DEF_TEST(ImageFilterCache_RasterBacked, reporter) {
 // Shared test code for both the raster and gpu-backed image cases
 static void test_image_backed(skiatest::Reporter* reporter, const sk_sp<SkImage>& srcImage) {
     const SkIRect& full = SkIRect::MakeWH(kFullSize, kFullSize);
+    SkColorSpace* legacyColorSpace = nullptr;
 
-    sk_sp<SkSpecialImage> fullImg(SkSpecialImage::MakeFromImage(full, srcImage));
+    sk_sp<SkSpecialImage> fullImg(SkSpecialImage::MakeFromImage(full, srcImage, legacyColorSpace));
 
     const SkIRect& subset = SkIRect::MakeXYWH(kPad, kPad, kSmallerSize, kSmallerSize);
 
-    sk_sp<SkSpecialImage> subsetImg(SkSpecialImage::MakeFromImage(subset, srcImage));
+    sk_sp<SkSpecialImage> subsetImg(SkSpecialImage::MakeFromImage(subset, srcImage,
+                                                                  legacyColorSpace));
 
     test_find_existing(reporter, fullImg, subsetImg);
     test_dont_find_if_diff_key(reporter, fullImg, subsetImg);
@@ -191,7 +193,7 @@ static GrTexture* create_texture(GrContext* context) {
 }
 
 DEF_GPUTEST_FOR_RENDERING_CONTEXTS(ImageFilterCache_ImageBackedGPU, reporter, ctxInfo) {
-    SkAutoTUnref<GrTexture> srcTexture(create_texture(ctxInfo.grContext()));
+    sk_sp<GrTexture> srcTexture(create_texture(ctxInfo.grContext()));
     if (!srcTexture) {
         return;
     }

@@ -6,19 +6,16 @@
  */
 
 #include "SkColorSpace_XYZ.h"
+#include "SkColorSpacePriv.h"
 #include "SkColorSpaceXform_Base.h"
-
-static constexpr float gSRGB_toXYZD50[] {
-    0.4358f, 0.3853f, 0.1430f,    // Rx, Gx, Bx
-    0.2224f, 0.7170f, 0.0606f,    // Ry, Gy, Gz
-    0.0139f, 0.0971f, 0.7139f,    // Rz, Gz, Bz
-};
+#include "SkOpts.h"
 
 SkColorSpace_XYZ::SkColorSpace_XYZ(SkGammaNamed gammaNamed, const SkMatrix44& toXYZD50)
     : INHERITED(nullptr)
     , fGammaNamed(gammaNamed)
     , fGammas(nullptr)
     , fToXYZD50(toXYZD50)
+    , fToXYZD50Hash(SkOpts::hash_fn(toXYZD50.values(), 16 * sizeof(SkMScalar), 0))
     , fFromXYZD50(SkMatrix44::kUninitialized_Constructor)
 {}
 
@@ -28,8 +25,17 @@ SkColorSpace_XYZ::SkColorSpace_XYZ(SkGammaNamed gammaNamed, sk_sp<SkGammas> gamm
     , fGammaNamed(gammaNamed)
     , fGammas(std::move(gammas))
     , fToXYZD50(toXYZD50)
-    , fFromXYZD50(SkMatrix44::kUninitialized_Constructor)
-{}
+    , fToXYZD50Hash(SkOpts::hash_fn(toXYZD50.values(), 16 * sizeof(SkMScalar), 0))
+    , fFromXYZD50(SkMatrix44::kUninitialized_Constructor) {
+    SkASSERT(!fGammas || 3 == fGammas->channels());
+    if (fGammas) {
+        for (int i = 0; i < fGammas->channels(); ++i) {
+            if (SkGammas::Type::kTable_Type == fGammas->type(i)) {
+                SkASSERT(fGammas->data(i).fTable.fSize >= 2);
+            }
+        }
+    }
+}
 
 const SkMatrix44* SkColorSpace_XYZ::fromXYZD50() const {
     fFromXYZOnce([this] {
@@ -53,11 +59,41 @@ bool SkColorSpace_XYZ::onGammaIsLinear() const {
     return kLinear_SkGammaNamed == fGammaNamed;
 }
 
+bool SkColorSpace_XYZ::onIsNumericalTransferFn(SkColorSpaceTransferFn* coeffs) const {
+    if (named_to_parametric(coeffs, fGammaNamed)) {
+        return true;
+    }
+
+    SkASSERT(fGammas);
+    if (fGammas->data(0) != fGammas->data(1) || fGammas->data(0) != fGammas->data(2)) {
+        return false;
+    }
+
+    if (fGammas->isValue(0)) {
+        value_to_parametric(coeffs, fGammas->data(0).fValue);
+        return true;
+    }
+
+    if (fGammas->isParametric(0)) {
+        *coeffs = fGammas->params(0);
+        return true;
+    }
+
+    return false;
+}
+
 sk_sp<SkColorSpace> SkColorSpace_XYZ::makeLinearGamma() {
     if (this->gammaIsLinear()) {
         return sk_ref_sp(this);
     }
-    return SkColorSpace_Base::NewRGB(kLinear_SkGammaNamed, fToXYZD50);
+    return SkColorSpace_Base::MakeRGB(kLinear_SkGammaNamed, fToXYZD50);
+}
+
+sk_sp<SkColorSpace> SkColorSpace_XYZ::makeSRGBGamma() {
+    if (this->gammaCloseToSRGB()) {
+        return sk_ref_sp(this);
+    }
+    return SkColorSpace_Base::MakeRGB(kSRGB_SkGammaNamed, fToXYZD50);
 }
 
 void SkColorSpace_XYZ::toDstGammaTables(const uint8_t* tables[3], sk_sp<SkData>* storage,

@@ -14,14 +14,14 @@
 #include "SkSLGLSLCodeGenerator.h"
 #include "SkTypes.h"
 
-SkSL::GLCaps GrGLSkSLCapsForContext(const GrGLContext& context);
-
 GrGLuint GrGLCompileAndAttachShader(const GrGLContext& glCtx,
                                     GrGLuint programId,
                                     GrGLenum type,
                                     const char** strings,
                                     int* lengths,
                                     int count,
-                                    GrGpu::Stats*);
+                                    GrGpu::Stats*,
+                                    const SkSL::Program::Settings& settings,
+                                    SkSL::Program::Inputs* inputs);
 
 #endif

@@ -6,6 +6,7 @@
  */
 #include "skdiff.h"
 #include "skdiff_utils.h"
+#include "sk_tool_utils.h"
 #include "SkBitmap.h"
 #include "SkCodec.h"
 #include "SkData.h"
@@ -34,7 +35,7 @@ sk_sp<SkData> read_file(const char* file_path) {
 }
 
 bool get_bitmap(sk_sp<SkData> fileBits, DiffResource& resource, bool sizeOnly) {
-    SkAutoTDelete<SkCodec> codec(SkCodec::NewFromData(fileBits));
+    std::unique_ptr<SkCodec> codec(SkCodec::NewFromData(fileBits));
     if (!codec) {
         SkDebugf("ERROR: could not create codec for <%s>\n", resource.fFullPath.c_str());
         resource.fStatus = DiffResource::kCouldNotDecode_Status;
@@ -82,8 +83,8 @@ bool write_bitmap(const SkString& path, const SkBitmap& bitmap) {
     SkBitmap copy;
     bitmap.copyTo(&copy, kN32_SkColorType);
     force_all_opaque(copy);
-    return SkImageEncoder::EncodeFile(path.c_str(), copy,
-                                      SkImageEncoder::kPNG_Type, 100);
+    return sk_tool_utils::EncodeImageToFile(path.c_str(), copy,
+                                      SkEncodedImageFormat::kPNG, 100);
 }
 
 /// Return a copy of the "input" string, within which we have replaced all instances

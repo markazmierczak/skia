@@ -23,7 +23,13 @@ class SkPath;
 */
 typedef SkIRect SkXRect;
 
+// Use this to check that we successfully guard the change against Chromium layout tests
+#ifndef  SK_SUPPORT_LEGACY_AAA
+# define SK_SUPPORT_LEGACY_AAA
+#endif
+
 extern std::atomic<bool> gSkUseAnalyticAA;
+extern std::atomic<bool> gSkForceAnalyticAA;
 
 class AdditiveBlitter;
 
@@ -85,9 +91,8 @@ private:
                               const SkRegion*, SkBlitter*);
     static void HairLineRgn(const SkPoint[], int count, const SkRegion*, SkBlitter*);
     static void AntiHairLineRgn(const SkPoint[], int count, const SkRegion*, SkBlitter*);
-    static void AAAFillPath(const SkPath& path, const SkRegion& origClip, SkBlitter* blitter);
-    static void aaa_fill_path(const SkPath& path, const SkIRect* clipRect, AdditiveBlitter*,
-                   int start_y, int stop_y, const SkRegion& clipRgn, bool isUsingMask);
+    static void AAAFillPath(const SkPath& path, const SkRegion& origClip, SkBlitter* blitter,
+                            bool forceRLE = false); // SkAAClip uses forceRLE
 };
 
 /** Assign an SkXRect from a SkIRect, by promoting the src rect's coordinates

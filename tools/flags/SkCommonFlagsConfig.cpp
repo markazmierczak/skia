@@ -20,9 +20,6 @@ static const char defaultConfigs[] =
 #if defined(SK_BUILD_FOR_WIN)
     " angle_d3d11_es2"
 #endif
-#ifdef SK_BUILD_FOR_ANDROID_FRAMEWORK
-    " hwui"
-#endif
     ;
 
 static const struct {
@@ -61,10 +58,11 @@ static const struct {
     { "debug",                 "gpu", "api=debug" },
     { "nullgpu",               "gpu", "api=null" },
     { "angle_d3d11_es2",       "gpu", "api=angle_d3d11_es2" },
+    { "angle_d3d11_es3",       "gpu", "api=angle_d3d11_es3" },
     { "angle_d3d9_es2",        "gpu", "api=angle_d3d9_es2" },
     { "angle_d3d11_es2_msaa4", "gpu", "api=angle_d3d11_es2,samples=4" },
     { "angle_gl_es2",          "gpu", "api=angle_gl_es2" },
-    { "angle_gl_es2",          "gpu", "api=angle_gl_es2" },
+    { "angle_gl_es3",          "gpu", "api=angle_gl_es3" },
     { "commandbuffer",         "gpu", "api=commandbuffer" }
 #if SK_MESA
     ,{ "mesa",                 "gpu", "api=mesa" }
@@ -83,11 +81,7 @@ static const struct {
 };
 
 static const char configHelp[] =
-    "Options: 565 8888 srgb f16 nonrendering null pdf pdfa skp pipe svg xps"
-#ifdef SK_BUILD_FOR_ANDROID_FRAMEWORK
-    " hwui"
-#endif
-    ;
+    "Options: 565 8888 srgb f16 nonrendering null pdf pdfa skp pipe svg xps";
 
 static const char* config_help_fn() {
     static SkString helpString;
@@ -186,8 +180,19 @@ SkCommandLineConfigGpu::SkCommandLineConfigGpu(
     if (useInstanced) {
         fContextOptions |= ContextOptions::kUseInstanced;
     }
-    if (SkColorAndColorSpaceAreGammaCorrect(colorType, colorSpace.get())) {
+    // Subtle logic: If the config has a color space attached, we're going to be rendering to sRGB,
+    // so we need that capability. In addition, to get the widest test coverage, we DO NOT require
+    // that we can disable sRGB decode. (That's for rendering sRGB sources to legacy surfaces).
+    //
+    // If the config doesn't have a color space attached, we're going to be rendering in legacy
+    // mode. In that case, we can't allow a context to be created that has sRGB support without
+    // the ability to disable sRGB decode. Otherwise, all of our sRGB source resources will be
+    // treated as sRGB textures, but we will be unable to prevent the decode, causing them to be
+    // too dark.
+    if (fColorSpace) {
         fContextOptions |= ContextOptions::kRequireSRGBSupport;
+    } else {
+        fContextOptions |= ContextOptions::kRequireSRGBDecodeDisableSupport;
     }
 }
 static bool parse_option_int(const SkString& value, int* outInt) {
@@ -286,8 +291,8 @@ static bool parse_option_gpu_color(const SkString& value,
 
     // First, figure out color gamut that we'll work in (default to sRGB)
     const bool linearGamma = commands[0].equals("f16");
-    *outColorSpace = SkColorSpace::NewNamed(linearGamma ? SkColorSpace::kSRGBLinear_Named
-                                                        : SkColorSpace::kSRGB_Named);
+    *outColorSpace = SkColorSpace::MakeNamed(linearGamma ? SkColorSpace::kSRGBLinear_Named
+                                                         : SkColorSpace::kSRGB_Named);
     if (commands.count() == 2) {
         if (commands[1].equals("srgb")) {
             // sRGB gamut (which is our default)
@@ -300,10 +305,10 @@ static bool parse_option_gpu_color(const SkString& value,
             };
             SkMatrix44 wideGamutRGBMatrix(SkMatrix44::kUninitialized_Constructor);
             wideGamutRGBMatrix.set3x3RowMajorf(gWideGamutRGB_toXYZD50);
-            *outColorSpace = SkColorSpace::NewRGB(linearGamma
+            *outColorSpace = SkColorSpace::MakeRGB(linearGamma
                                                           ? SkColorSpace::kLinear_RenderTargetGamma
                                                           : SkColorSpace::kSRGB_RenderTargetGamma,
-                                                  wideGamutRGBMatrix);
+                                                   wideGamutRGBMatrix);
         } else if (commands[1].equals("narrow")) {
             // NarrowGamut RGB (an artifically smaller than sRGB gamut)
             SkColorSpacePrimaries primaries ={
@@ -314,10 +319,10 @@ static bool parse_option_gpu_color(const SkString& value,
             };
             SkMatrix44 narrowGamutRGBMatrix(SkMatrix44::kUninitialized_Constructor);
             primaries.toXYZD50(&narrowGamutRGBMatrix);
-            *outColorSpace = SkColorSpace::NewRGB(linearGamma
+            *outColorSpace = SkColorSpace::MakeRGB(linearGamma
                                                           ? SkColorSpace::kLinear_RenderTargetGamma
                                                           : SkColorSpace::kSRGB_RenderTargetGamma,
-                                                  narrowGamutRGBMatrix);
+                                                   narrowGamutRGBMatrix);
         } else {
             // Unknown color gamut
             return false;

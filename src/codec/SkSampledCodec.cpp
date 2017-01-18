@@ -26,7 +26,7 @@ SkISize SkSampledCodec::accountForNativeScaling(int* sampleSizePtr, int* nativeS
     }
 
     // Only JPEG supports native downsampling.
-    if (this->codec()->getEncodedFormat() == kJPEG_SkEncodedFormat) {
+    if (this->codec()->getEncodedFormat() == SkEncodedImageFormat::kJPEG) {
         // See if libjpeg supports this scale directly
         switch (sampleSize) {
             case 2:
@@ -304,7 +304,6 @@ SkCodec::Result SkSampledCodec::sampledDecode(const SkImageInfo& info, void* pix
             }
             return SkCodec::kSuccess;
         }
-        case SkCodec::kOutOfOrder_SkScanlineOrder:
         case SkCodec::kBottomUp_SkScanlineOrder: {
             // Note that these modes do not support subsetting.
             SkASSERT(0 == subsetY && nativeSize.height() == subsetHeight);

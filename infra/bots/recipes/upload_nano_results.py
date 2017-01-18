@@ -7,84 +7,19 @@
 
 
 DEPS = [
-  'build/file',
-  'recipe_engine/path',
   'recipe_engine/properties',
-  'recipe_engine/step',
-  'recipe_engine/time',
+  'skia-recipes/upload_nano_results',
 ]
 
 
 def RunSteps(api):
-  # Upload the nanobench resuls.
-  builder_name = api.properties['buildername']
-
-  now = api.time.utcnow()
-
-  src_path = api.path['cwd'].join(
-      'perfdata', builder_name, 'data')
-  results = api.file.glob(
-      'find results',
-      'nanobench*.json',
-      cwd=src_path,
-      test_data=['nanobench_abc123.json'],
-      infra_step=True)
-  if len(results) != 1:  # pragma: nocover
-    raise Exception('Unable to find nanobench JSON file!')
-
-  src = src_path.join(results[0])
-  basename = api.path.basename(src)
-  gs_path = '/'.join((
-      'nano-json-v1', str(now.year).zfill(4),
-      str(now.month).zfill(2), str(now.day).zfill(2), str(now.hour).zfill(2),
-      builder_name))
-
-  issue = str(api.properties.get('issue', ''))
-  patchset = str(api.properties.get('patchset', ''))
-  if (api.properties.get('patch_storage', '') == 'gerrit' and
-      api.properties.get('nobuildbot', '') != 'True'):
-    issue = str(api.properties['event.change.number'])
-    patchset = str(api.properties['event.patchSet.ref']).split('/')[-1]
-  if issue and patchset:
-    gs_path = '/'.join(('trybot', gs_path, issue, patchset))
-
-  dst = '/'.join(('gs://skia-perf', gs_path, basename))
-
-  api.step('upload',
-           cmd=['gsutil', 'cp', '-a', 'public-read', '-z', 'json', src, dst],
-           infra_step=True)
+  api.upload_nano_results.run()
 
 
 def GenTests(api):
-  builder = 'Test-Ubuntu-GCC-GCE-CPU-AVX2-x86_64-Debug'
   yield (
-    api.test('normal_bot') +
-    api.properties(buildername=builder,
+    api.test('upload') +
+    api.properties(buildername='Test-Ubuntu-GCC-GCE-CPU-AVX2-x86_64-Debug',
                    revision='abc123',
                    path_config='kitchen')
-  )
-
-  builder = 'Test-Ubuntu-GCC-GCE-CPU-AVX2-x86_64-Debug-Trybot'
-  yield (
-    api.test('trybot') +
-    api.properties(buildername=builder,
-                   revision='abc123',
-                   path_config='kitchen',
-                   issue='12345',
-                   patchset='1002')
-  )
-
-  gerrit_kwargs = {
-    'patch_storage': 'gerrit',
-    'repository': 'skia',
-    'event.patchSet.ref': 'refs/changes/00/2100/2',
-    'event.change.number': '2100',
-  }
-  yield (
-      api.test('recipe_with_gerrit_patch') +
-      api.properties(
-          buildername=builder,
-          revision='abc123',
-          path_config='kitchen',
-          **gerrit_kwargs)
   )

@@ -169,9 +169,9 @@ enum SkYUVColorSpace {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-enum class SkSourceGammaTreatment {
-    kRespect,
-    kIgnore,
+enum class SkDestinationSurfaceColorMode {
+    kLegacy,
+    kGammaAndColorSpaceAware,
 };
 
 /**
@@ -234,6 +234,7 @@ public:
     SkColorType colorType() const { return fColorType; }
     SkAlphaType alphaType() const { return fAlphaType; }
     SkColorSpace* colorSpace() const { return fColorSpace.get(); }
+    sk_sp<SkColorSpace> refColorSpace() const { return fColorSpace; }
 
     bool isEmpty() const { return fWidth <= 0 || fHeight <= 0; }
 
@@ -347,17 +348,5 @@ private:
         , fAlphaType(at)
     {}
 };
-
-///////////////////////////////////////////////////////////////////////////////
-
-static inline bool SkColorAndColorSpaceAreGammaCorrect(SkColorType ct, SkColorSpace* cs) {
-    // Anything with a color-space attached is gamma-correct, as is F16.
-    // To get legacy behavior, you need to ask for non-F16, with a nullptr color space.
-    return (cs != nullptr) || kRGBA_F16_SkColorType == ct;
-}
-
-static inline bool SkImageInfoIsGammaCorrect(const SkImageInfo& info) {
-    return SkColorAndColorSpaceAreGammaCorrect(info.colorType(), info.colorSpace());
-}
 
 #endif

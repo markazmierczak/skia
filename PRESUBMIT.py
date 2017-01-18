@@ -40,11 +40,10 @@ GOLD_TRYBOT_URL = 'https://gold.skia.org/search?issue='
 
 # Path to CQ bots feature is described in https://bug.skia.org/4364
 PATH_PREFIX_TO_EXTRA_TRYBOTS = {
-    # pylint: disable=line-too-long
-    'src/opts/': 'master.client.skia:Test-Ubuntu-GCC-GCE-CPU-AVX2-x86_64-Release-SKNX_NO_SIMD-Trybot',
-
-    'include/private/SkAtomics.h': ('master.client.skia:'
-      'Test-Ubuntu-Clang-GCE-CPU-AVX2-x86_64-Release-TSAN-Trybot,'
+    'src/opts/':
+        'skia.primary:Test-Ubuntu-GCC-GCE-CPU-AVX2-x86_64-Release-SKNX_NO_SIMD',
+    'include/private/SkAtomics.h': ('skia.primary:'
+      'Test-Ubuntu-Clang-GCE-CPU-AVX2-x86_64-Release-TSAN,'
       'Test-Ubuntu-Clang-Golo-GPU-GT610-x86_64-Release-TSAN-Trybot'
     ),
 
@@ -187,7 +186,8 @@ def _CheckGNFormatted(input_api, output_api):
   """Make sure any .gn files we're changing have been formatted."""
   results = []
   for f in input_api.AffectedFiles():
-    if not f.LocalPath().endswith('.gn'):
+    if (not f.LocalPath().endswith('.gn') and
+        not f.LocalPath().endswith('.gni')):
       continue
 
     gn = 'gn.bat' if 'win32' in sys.platform else 'gn'
@@ -448,7 +448,6 @@ def PostUploadHook(cl, change, output_api):
   """git cl upload will call this hook after the issue is created/modified.
 
   This hook does the following:
-  * Adds a link to the CL's Gold trybot results.
   * Adds a link to preview docs changes if there are any docs changes in the CL.
   * Adds 'NOTRY=true' if the CL contains only docs changes.
   * Adds 'NOTREECHECKS=true' for non master branch changes since they do not
@@ -485,15 +484,6 @@ def PostUploadHook(cl, change, output_api):
       original_description = re.sub('\n+\Z', '\n', original_description)
 
     new_description = original_description
-
-    # Add GOLD_TRYBOT_URL if it does not exist yet.
-    if not re.search(r'^GOLD_TRYBOT_URL=', new_description, re.M | re.I):
-      new_description += '\nGOLD_TRYBOT_URL= %s%s' % (GOLD_TRYBOT_URL, issue)
-      results.append(
-          output_api.PresubmitNotifyResult(
-              'Added link to Gold trybot runs to the CL\'s description.\n'
-              'Note: Results may take sometime to be populated after trybots '
-              'complete.'))
 
     # If the change includes only doc changes then add NOTRY=true in the
     # CL's description if it does not exist yet.

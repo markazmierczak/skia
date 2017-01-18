@@ -111,7 +111,7 @@ static SkBitmap make_src_bitmap() {
 static void fill_src_canvas(SkCanvas* canvas) {
     canvas->save();
     canvas->setMatrix(SkMatrix::I());
-    canvas->clipRect(DEV_RECT_S, SkCanvas::kReplace_Op);
+    canvas->clipRect(DEV_RECT_S, kReplace_SkClipOp);
     SkPaint paint;
     paint.setBlendMode(SkBlendMode::kSrc);
     canvas->drawBitmap(make_src_bitmap(), 0, 0, &paint);
@@ -449,10 +449,7 @@ static void test_readpixels_texture(skiatest::Reporter* reporter, GrTexture* tex
                 if (startsWithPixels) {
                     fill_dst_bmp_with_init_data(&bmp);
                     GrPixelConfig dstConfig =
-                            SkImageInfo2GrPixelConfig(gReadPixelsConfigs[c].fColorType,
-                                                      gReadPixelsConfigs[c].fAlphaType,
-                                                      nullptr,
-                                                      *texture->getContext()->caps());
+                            SkImageInfo2GrPixelConfig(bmp.info(), *texture->getContext()->caps());
                     uint32_t flags = 0;
                     if (gReadPixelsConfigs[c].fAlphaType == kUnpremul_SkAlphaType) {
                         flags = GrContext::kUnpremul_PixelOpsFlag;
@@ -472,18 +469,18 @@ static void test_readpixels_texture(skiatest::Reporter* reporter, GrTexture* tex
 }
 DEF_GPUTEST_FOR_RENDERING_CONTEXTS(ReadPixels_Texture, reporter, ctxInfo) {
     // On the GPU we will also try reading back from a non-renderable texture.
-    for (auto& origin : {kBottomLeft_GrSurfaceOrigin, kTopLeft_GrSurfaceOrigin}) {
-        SkAutoTUnref<GrTexture> texture;
-        GrSurfaceDesc desc;
-        desc.fFlags = kRenderTarget_GrSurfaceFlag;
-        desc.fWidth = DEV_W;
-        desc.fHeight = DEV_H;
-        desc.fConfig = kSkia8888_GrPixelConfig;
-        desc.fOrigin = origin;
-        desc.fFlags = kNone_GrSurfaceFlags;
-        texture.reset(ctxInfo.grContext()->textureProvider()->createTexture(desc,
-                                                                            SkBudgeted::kNo));
-        test_readpixels_texture(reporter, texture);
+    for (auto origin : {kBottomLeft_GrSurfaceOrigin, kTopLeft_GrSurfaceOrigin}) {
+        for (auto flags : {kNone_GrSurfaceFlags, kRenderTarget_GrSurfaceFlag}) {
+            GrSurfaceDesc desc;
+            desc.fFlags = flags;
+            desc.fWidth = DEV_W;
+            desc.fHeight = DEV_H;
+            desc.fConfig = kSkia8888_GrPixelConfig;
+            desc.fOrigin = origin;
+            sk_sp<GrTexture> texture(ctxInfo.grContext()->textureProvider()->createTexture(desc,
+                SkBudgeted::kNo));
+            test_readpixels_texture(reporter, texture.get());
+        }
     }
 }
 #endif

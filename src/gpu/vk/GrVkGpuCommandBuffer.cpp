@@ -9,9 +9,9 @@
 
 #include "GrFixedClip.h"
 #include "GrMesh.h"
+#include "GrOpFlushState.h"
 #include "GrPipeline.h"
 #include "GrRenderTargetPriv.h"
-#include "GrTextureAccess.h"
 #include "GrTexturePriv.h"
 #include "GrVkCommandBuffer.h"
 #include "GrVkGpu.h"
@@ -53,23 +53,28 @@ void get_vk_load_store_ops(const GrGpuCommandBuffer::LoadAndStoreInfo& info,
 }
 
 GrVkGpuCommandBuffer::GrVkGpuCommandBuffer(GrVkGpu* gpu,
-                                           GrVkRenderTarget* target,
                                            const LoadAndStoreInfo& colorInfo,
                                            const LoadAndStoreInfo& stencilInfo)
     : fGpu(gpu)
-    , fRenderTarget(target)
-    , fIsEmpty(true)
-    , fStartsWithClear(false) {
-    VkAttachmentLoadOp vkLoadOp;
-    VkAttachmentStoreOp vkStoreOp;
+    , fRenderTarget(nullptr)
+    , fClearColor(GrColor4f::FromGrColor(colorInfo.fClearColor)){
 
-    get_vk_load_store_ops(colorInfo, &vkLoadOp, &vkStoreOp);
-    GrVkRenderPass::LoadStoreOps vkColorOps(vkLoadOp, vkStoreOp);
+    get_vk_load_store_ops(colorInfo, &fVkColorLoadOp, &fVkColorStoreOp);
 
-    get_vk_load_store_ops(stencilInfo, &vkLoadOp, &vkStoreOp);
-    GrVkRenderPass::LoadStoreOps vkStencilOps(vkLoadOp, vkStoreOp);
+    get_vk_load_store_ops(stencilInfo, &fVkStencilLoadOp, &fVkStencilStoreOp);
+
+    fCurrentCmdBuffer = -1;
+}
+
+void GrVkGpuCommandBuffer::init(GrVkRenderTarget* target) {
+    SkASSERT(!fRenderTarget);
+    fRenderTarget = target;
+
+    GrVkRenderPass::LoadStoreOps vkColorOps(fVkColorLoadOp, fVkColorStoreOp);
+    GrVkRenderPass::LoadStoreOps vkStencilOps(fVkStencilLoadOp, fVkStencilStoreOp);
 
     CommandBufferInfo& cbInfo = fCommandBufferInfos.push_back();
+    SkASSERT(fCommandBufferInfos.count() == 1);
     fCurrentCmdBuffer = 0;
 
     const GrVkResourceProvider::CompatibleRPHandle& rpHandle = target->compatibleRenderPassHandle();
@@ -83,13 +88,19 @@ GrVkGpuCommandBuffer::GrVkGpuCommandBuffer(GrVkGpu* gpu,
                                                                      vkStencilOps);
     }
 
-    GrColorToRGBAFloat(colorInfo.fClearColor, cbInfo.fColorClearValue.color.float32);
+    cbInfo.fColorClearValue.color.float32[0] = fClearColor.fRGBA[0];
+    cbInfo.fColorClearValue.color.float32[1] = fClearColor.fRGBA[1];
+    cbInfo.fColorClearValue.color.float32[2] = fClearColor.fRGBA[2];
+    cbInfo.fColorClearValue.color.float32[3] = fClearColor.fRGBA[3];
 
     cbInfo.fBounds.setEmpty();
+    cbInfo.fIsEmpty = true;
+    cbInfo.fStartsWithClear = false;
 
-    cbInfo.fCommandBuffer = gpu->resourceProvider().findOrCreateSecondaryCommandBuffer();
-    cbInfo.fCommandBuffer->begin(gpu, target->framebuffer(), cbInfo.fRenderPass);
+    cbInfo.fCommandBuffer = fGpu->resourceProvider().findOrCreateSecondaryCommandBuffer();
+    cbInfo.fCommandBuffer->begin(fGpu, target->framebuffer(), cbInfo.fRenderPass);
 }
+
 
 GrVkGpuCommandBuffer::~GrVkGpuCommandBuffer() {
     for (int i = 0; i < fCommandBufferInfos.count(); ++i) {
@@ -103,22 +114,15 @@ GrGpu* GrVkGpuCommandBuffer::gpu() { return fGpu; }
 GrRenderTarget* GrVkGpuCommandBuffer::renderTarget() { return fRenderTarget; }
 
 void GrVkGpuCommandBuffer::end() {
-    fCommandBufferInfos[fCurrentCmdBuffer].fCommandBuffer->end(fGpu);
+    if (fCurrentCmdBuffer >= 0) {
+        fCommandBufferInfos[fCurrentCmdBuffer].fCommandBuffer->end(fGpu);
+    }
 }
 
 void GrVkGpuCommandBuffer::onSubmit() {
-    // TODO: We can't add this optimization yet since many things create a scratch texture which
-    // adds the discard immediately, but then don't draw to it right away. This causes the discard
-    // to be ignored and we get yelled at for loading uninitialized data. However, once MDP lands,
-    // the discard will get reordered with the rest of the draw commands and we can re-enable this.
-#if 0
-    if (fIsEmpty && !fStartsWithClear) {
-        // We have sumbitted no actual draw commands to the command buffer and we are not using
-        // the render pass to do a clear so there is no need to submit anything.
+    if (!fRenderTarget) {
         return;
     }
-#endif
-
     // Change layout of our render target so it can be used as the color attachment. Currently
     // we don't attach the resolve to the framebuffer so no need to change its layout.
     GrVkImage* targetImage = fRenderTarget->msaaImage() ? fRenderTarget->msaaImage()
@@ -145,6 +149,23 @@ void GrVkGpuCommandBuffer::onSubmit() {
     for (int i = 0; i < fCommandBufferInfos.count(); ++i) {
         CommandBufferInfo& cbInfo = fCommandBufferInfos[i];
 
+        for (int j = 0; j < cbInfo.fPreDrawUploads.count(); ++j) {
+            InlineUploadInfo& iuInfo = cbInfo.fPreDrawUploads[j];
+            iuInfo.fFlushState->doUpload(iuInfo.fUpload);
+        }
+
+        // TODO: We can't add this optimization yet since many things create a scratch texture which
+        // adds the discard immediately, but then don't draw to it right away. This causes the
+        // discard to be ignored and we get yelled at for loading uninitialized data. However, once
+        // MDP lands, the discard will get reordered with the rest of the draw commands and we can
+        // re-enable this.
+#if 0
+        if (cbInfo.fIsEmpty && !cbInfo.fStartsWithClear) {
+            // We have sumbitted no actual draw commands to the command buffer and we are not using
+            // the render pass to do a clear so there is no need to submit anything.
+            continue;
+        }
+#endif
         if (cbInfo.fBounds.intersect(0, 0,
                                      SkIntToScalar(fRenderTarget->width()),
                                      SkIntToScalar(fRenderTarget->height()))) {
@@ -157,9 +178,15 @@ void GrVkGpuCommandBuffer::onSubmit() {
     }
 }
 
-void GrVkGpuCommandBuffer::discard() {
-    if (fIsEmpty) {
-        CommandBufferInfo& cbInfo = fCommandBufferInfos[fCurrentCmdBuffer];
+void GrVkGpuCommandBuffer::discard(GrRenderTarget* rt) {
+    GrVkRenderTarget* target = static_cast<GrVkRenderTarget*>(rt);
+    if (!fRenderTarget) {
+        this->init(target);
+    }
+    SkASSERT(target == fRenderTarget);
+
+    CommandBufferInfo& cbInfo = fCommandBufferInfos[fCurrentCmdBuffer];
+    if (cbInfo.fIsEmpty) {
         // We will change the render pass to do a clear load instead
         GrVkRenderPass::LoadStoreOps vkColorOps(VK_ATTACHMENT_LOAD_OP_DONT_CARE,
                                                 VK_ATTACHMENT_STORE_OP_STORE);
@@ -182,13 +209,20 @@ void GrVkGpuCommandBuffer::discard() {
 
         SkASSERT(cbInfo.fRenderPass->isCompatible(*oldRP));
         oldRP->unref(fGpu);
-        fStartsWithClear = false;
+        cbInfo.fBounds.join(fRenderTarget->getBoundsRect());
+        cbInfo.fStartsWithClear = false;
     }
 }
 
-void GrVkGpuCommandBuffer::onClearStencilClip(const GrFixedClip& clip,
+void GrVkGpuCommandBuffer::onClearStencilClip(GrRenderTarget* rt, const GrFixedClip& clip,
                                               bool insideStencilMask) {
     SkASSERT(!clip.hasWindowRectangles());
+
+    GrVkRenderTarget* target = static_cast<GrVkRenderTarget*>(rt);
+    if (!fRenderTarget) {
+        this->init(target);
+    }
+    SkASSERT(target == fRenderTarget);
 
     CommandBufferInfo& cbInfo = fCommandBufferInfos[fCurrentCmdBuffer];
 
@@ -237,7 +271,7 @@ void GrVkGpuCommandBuffer::onClearStencilClip(const GrFixedClip& clip,
     attachment.clearValue.depthStencil = vkStencilColor;
 
     cbInfo.fCommandBuffer->clearAttachments(fGpu, 1, &attachment, 1, &clearRect);
-    fIsEmpty = false;
+    cbInfo.fIsEmpty = false;
 
     // Update command buffer bounds
     if (!clip.scissorEnabled()) {
@@ -247,16 +281,22 @@ void GrVkGpuCommandBuffer::onClearStencilClip(const GrFixedClip& clip,
     }
 }
 
-void GrVkGpuCommandBuffer::onClear(const GrFixedClip& clip, GrColor color) {
+void GrVkGpuCommandBuffer::onClear(GrRenderTarget* rt, const GrFixedClip& clip, GrColor color) {
     // parent class should never let us get here with no RT
     SkASSERT(!clip.hasWindowRectangles());
+
+    GrVkRenderTarget* target = static_cast<GrVkRenderTarget*>(rt);
+    if (!fRenderTarget) {
+        this->init(target);
+    }
+    SkASSERT(target == fRenderTarget);
 
     CommandBufferInfo& cbInfo = fCommandBufferInfos[fCurrentCmdBuffer];
 
     VkClearColorValue vkColor;
     GrColorToRGBAFloat(color, vkColor.float32);
 
-    if (fIsEmpty && !clip.scissorEnabled()) {
+    if (cbInfo.fIsEmpty && !clip.scissorEnabled()) {
         // We will change the render pass to do a clear load instead
         GrVkRenderPass::LoadStoreOps vkColorOps(VK_ATTACHMENT_LOAD_OP_CLEAR,
                                                 VK_ATTACHMENT_STORE_OP_STORE);
@@ -281,7 +321,7 @@ void GrVkGpuCommandBuffer::onClear(const GrFixedClip& clip, GrColor color) {
         oldRP->unref(fGpu);
 
         GrColorToRGBAFloat(color, cbInfo.fColorClearValue.color.float32);
-        fStartsWithClear = true;
+        cbInfo.fStartsWithClear = true;
 
         // Update command buffer bounds
         cbInfo.fBounds.join(fRenderTarget->getBoundsRect());
@@ -315,7 +355,7 @@ void GrVkGpuCommandBuffer::onClear(const GrFixedClip& clip, GrColor color) {
     attachment.clearValue.color = vkColor;
 
     cbInfo.fCommandBuffer->clearAttachments(fGpu, 1, &attachment, 1, &clearRect);
-    fIsEmpty = false;
+    cbInfo.fIsEmpty = false;
 
     // Update command buffer bounds
     if (!clip.scissorEnabled()) {
@@ -324,6 +364,47 @@ void GrVkGpuCommandBuffer::onClear(const GrFixedClip& clip, GrColor color) {
         cbInfo.fBounds.join(SkRect::Make(clip.scissorRect()));
     }
     return;
+}
+
+void GrVkGpuCommandBuffer::addAdditionalCommandBuffer() {
+    fCommandBufferInfos[fCurrentCmdBuffer].fCommandBuffer->end(fGpu);
+
+    CommandBufferInfo& cbInfo = fCommandBufferInfos.push_back();
+    fCurrentCmdBuffer++;
+
+    GrVkRenderPass::LoadStoreOps vkColorOps(VK_ATTACHMENT_LOAD_OP_LOAD,
+                                            VK_ATTACHMENT_STORE_OP_STORE);
+    GrVkRenderPass::LoadStoreOps vkStencilOps(VK_ATTACHMENT_LOAD_OP_LOAD,
+                                              VK_ATTACHMENT_STORE_OP_STORE);
+
+    const GrVkResourceProvider::CompatibleRPHandle& rpHandle =
+            fRenderTarget->compatibleRenderPassHandle();
+    if (rpHandle.isValid()) {
+        cbInfo.fRenderPass = fGpu->resourceProvider().findRenderPass(rpHandle,
+                                                                     vkColorOps,
+                                                                     vkStencilOps);
+    } else {
+        cbInfo.fRenderPass = fGpu->resourceProvider().findRenderPass(*fRenderTarget,
+                                                                     vkColorOps,
+                                                                     vkStencilOps);
+    }
+
+    cbInfo.fCommandBuffer = fGpu->resourceProvider().findOrCreateSecondaryCommandBuffer();
+    // It shouldn't matter what we set the clear color to here since we will assume loading of the
+    // attachment.
+    memset(&cbInfo.fColorClearValue, 0, sizeof(VkClearValue));
+    cbInfo.fBounds.setEmpty();
+    cbInfo.fIsEmpty = true;
+    cbInfo.fStartsWithClear = false;
+
+    cbInfo.fCommandBuffer->begin(fGpu, fRenderTarget->framebuffer(), cbInfo.fRenderPass);
+}
+
+void GrVkGpuCommandBuffer::inlineUpload(GrOpFlushState* state, GrDrawOp::DeferredUploadFn& upload) {
+    if (!fCommandBufferInfos[fCurrentCmdBuffer].fIsEmpty) {
+        this->addAdditionalCommandBuffer();
+    }
+    fCommandBufferInfos[fCurrentCmdBuffer].fPreDrawUploads.emplace_back(state, upload);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -378,9 +459,9 @@ sk_sp<GrVkPipelineState> GrVkGpuCommandBuffer::prepareDrawState(
 }
 
 static void prepare_sampled_images(const GrProcessor& processor, GrVkGpu* gpu) {
-    for (int i = 0; i < processor.numTextures(); ++i) {
-        const GrTextureAccess& texAccess = processor.textureAccess(i);
-        GrVkTexture* vkTexture = static_cast<GrVkTexture*>(processor.texture(i));
+    for (int i = 0; i < processor.numTextureSamplers(); ++i) {
+        const GrProcessor::TextureSampler& sampler = processor.textureSampler(i);
+        GrVkTexture* vkTexture = static_cast<GrVkTexture*>(sampler.texture());
         SkASSERT(vkTexture);
 
         // We may need to resolve the texture first if it is also a render target
@@ -389,9 +470,9 @@ static void prepare_sampled_images(const GrProcessor& processor, GrVkGpu* gpu) {
             gpu->onResolveRenderTarget(texRT);
         }
 
-        const GrTextureParams& params = texAccess.getParams();
+        const GrSamplerParams& params = sampler.params();
         // Check if we need to regenerate any mip maps
-        if (GrTextureParams::kMipMap_FilterMode == params.filterMode()) {
+        if (GrSamplerParams::kMipMap_FilterMode == params.filterMode()) {
             if (vkTexture->texturePriv().mipMapsAreDirty()) {
                 gpu->generateMipmap(vkTexture);
                 vkTexture->texturePriv().dirtyMipMaps(false);
@@ -414,6 +495,12 @@ void GrVkGpuCommandBuffer::onDraw(const GrPipeline& pipeline,
                                   const GrMesh* meshes,
                                   int meshCount,
                                   const SkRect& bounds) {
+    GrVkRenderTarget* target = static_cast<GrVkRenderTarget*>(pipeline.getRenderTarget());
+    if (!fRenderTarget) {
+        this->init(target);
+    }
+    SkASSERT(target == fRenderTarget);
+
     if (!meshCount) {
         return;
     }
@@ -471,7 +558,7 @@ void GrVkGpuCommandBuffer::onDraw(const GrPipeline& pipeline,
                                             nonIdxMesh->startVertex(),
                                             0);
             }
-            fIsEmpty = false;
+            cbInfo.fIsEmpty = false;
 
             fGpu->stats()->incNumDraws();
         } while ((nonIdxMesh = iter.next()));

@@ -119,8 +119,8 @@ typedef GrGLvoid* (GR_GL_FUNCTION_TYPE* GrGLMapBufferProc)(GrGLenum target, GrGL
 typedef GrGLvoid* (GR_GL_FUNCTION_TYPE* GrGLMapBufferRangeProc)(GrGLenum target, GrGLintptr offset, GrGLsizeiptr length, GrGLbitfield access);
 typedef GrGLvoid* (GR_GL_FUNCTION_TYPE* GrGLMapBufferSubDataProc)(GrGLuint target, GrGLintptr offset, GrGLsizeiptr size, GrGLenum access);
 typedef GrGLvoid* (GR_GL_FUNCTION_TYPE* GrGLMapTexSubImage2DProc)(GrGLenum target, GrGLint level, GrGLint xoffset, GrGLint yoffset, GrGLsizei width, GrGLsizei height, GrGLenum format, GrGLenum type, GrGLenum access);
-typedef GrGLvoid* (GR_GL_FUNCTION_TYPE* GrGLMemoryBarrierProc)(GrGLbitfield barriers);
-typedef GrGLvoid* (GR_GL_FUNCTION_TYPE* GrGLMemoryBarrierByRegionProc)(GrGLbitfield barriers);
+typedef GrGLvoid (GR_GL_FUNCTION_TYPE* GrGLMemoryBarrierProc)(GrGLbitfield barriers);
+typedef GrGLvoid (GR_GL_FUNCTION_TYPE* GrGLMemoryBarrierByRegionProc)(GrGLbitfield barriers);
 typedef GrGLvoid (GR_GL_FUNCTION_TYPE* GrGLPixelStoreiProc)(GrGLenum pname, GrGLint param);
 typedef GrGLvoid (GR_GL_FUNCTION_TYPE* GrGLPopGroupMarkerProc)();
 typedef GrGLvoid (GR_GL_FUNCTION_TYPE* GrGLPushGroupMarkerProc)(GrGLsizei length, const char* marker);
